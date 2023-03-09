@@ -1,10 +1,12 @@
-FROM nvcr.io/nvidia/pytorch:20.07-py3
+FROM nvcr.io/nvidia/pytorch:22.07-py3
 
 RUN mkdir /root/textretriever
 
 COPY . /root/textretriever
 
 WORKDIR /root/textretriever
+
+RUN pip install -r requirements.txt
 
 RUN python -m pip --no-cache-dir install --upgrade pip grpcio grpcio-tools && \
     ldconfig && \
