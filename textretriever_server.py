@@ -5,14 +5,16 @@ import argparse
 import torch
 from transformers import *
 from rank_bm25 import BM25Okapi
-from textretriever import OperationStatus, TextRetrievalResponse, RetrievalResult, ListingResponse, Candidate, OperationResponse, RetrieverStatus, DeletionRequest, AddOrUpdateRequest, ListingRequest
-from textretriever_grpc import TextRetrieverServicer, TextRetrieverServicer_to_server
+from textretriever_pb2 import OperationStatus, TextRetrievalResponse, RetrievalResult, ListingResponse, Candidate, OperationResponse, RetrieverStatus, DeletionRequest, AddOrUpdateRequest, ListingRequest
+from textretriever_pb2_grpc import TextRetrieverServicer, add_TextRetrieverServicer_to_server
 import numpy as np
 import pandas as pd
 import os
+from scipy.spatial.distance import cdist 
+
 
 class TextRetrieverServer(TextRetrieverServicer):
-    def __init__(self, args):
+    def __init__(self, args=None):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         ### dual encoder ###
         self.q_tokenizer = AutoTokenizer.from_pretrained("KoBigBird")
@@ -34,7 +36,7 @@ class TextRetrieverServer(TextRetrieverServicer):
         self.mono_tokenizer = AutoTokenizer.from_pretrained("KoBigBird")
         self.mono_encoder = AutoModel.from_pretrained("KoBigBird")
         self.mono_encoder.to(self.device)
-        self.mono_passage_embeddings = torch.load("mono_candidate_embs.pt")
+        self.mono_passage_embeddings = np.load("mono_candidate_embs.npy")
         self.mono_candidate_df = pd.read_csv("mono_candidate_texts.csv")
         self.mono_candidate_texts = self.mono_candidate_df["passages"].values
         # create list of candidate objects
@@ -52,7 +54,7 @@ class TextRetrieverServer(TextRetrieverServicer):
         self.bm25 = BM25Okapi(self.bm25_tokenized_corpus)
         # create list of candidate objects
         self.bm25_candidate_info = []
-        for i in range(len(self.candidate_texts)):
+        for i in range(len(self.bm25_candidate_texts)):
             cur_candidate = Candidate(text = self.bm25_candidate_texts[i], id = str(i), appendix = {"method":"BM25"})
             self.bm25_candidate_info.append(cur_candidate)
 
@@ -60,6 +62,7 @@ class TextRetrieverServer(TextRetrieverServicer):
         self.query_texts = request.query_texts
         self.num_candidates = request.num_candidates
         with torch.no_grad():
+            print("=========================================== Begin Experiment =====================================================") 
             try:
                 ### DPR ###
                 self.q_encoder.eval()
@@ -69,14 +72,16 @@ class TextRetrieverServer(TextRetrieverServicer):
                 for i in range(len(self.query_texts)):
                     encoded_query = self.q_tokenizer(str(self.query_texts[i]), max_length=512, truncation=True, padding="max_length", return_tensors="pt").to(self.device)
                     q_emb = self.q_encoder(**encoded_query).pooler_output
-                    dot_prod_scores = torch.matmul(self.q_emb, torch.transpose(self.dual_passage_embeddings, 0, 1))
+                    q_emb = q_emb.detach().cpu() 
+                    dot_prod_scores = torch.matmul(q_emb, torch.transpose(self.dual_passage_embeddings, 0, 1)) 
                     ranks = torch.argsort(dot_prod_scores, dim=1, descending=True).squeeze()
-                    scores = torch.sort(dot_prod_scores, dim=1, descending=True).squeeze()
+                    dot_prod_scores = dot_prod_scores.squeeze() 
+                    scores = torch.sort(dot_prod_scores, descending=True).values 
                     ranks = ranks[:self.num_candidates]
                     scores = scores[:self.num_candidates]
                     dual_retrieval_result = []
                     for j in range(len(ranks)):
-                        score = scores[j]
+                        score = scores[j].item() 
                         self.dual_candidate_info[ranks[j]].score = score
                         dual_retrieval_result.append(self.dual_candidate_info[ranks[j]])
                     retrieval_results.append(RetrievalResult(query_text=self.query_texts[i], candidates=dual_retrieval_result))
@@ -113,9 +118,13 @@ class TextRetrieverServer(TextRetrieverServicer):
                         self.bm25_candidate_info[ranks[j]].score = score
                         bm25_retrieval_result.append(self.bm25_candidate_info[ranks[j]])
                     retrieval_results.append(RetrievalResult(query_text=self.query_texts[i], candidates=bm25_retrieval_result))
-                return TextRetrievalResponse(status = SUCCESS, results = retrieval_results)
-            except:
-                return TextRetrievalResponse(status = FAILURE, results = [])
+                
+
+                print(retrieval_results) 
+                return TextRetrievalResponse(status = 5, results = retrieval_results)
+            except Exception as e:
+                print(e) 
+                return TextRetrievalResponse(status = 4, results = [])
 
     def ListCandidates(self, request, context):
         self.begin_id = request.begin_id
@@ -123,7 +132,7 @@ class TextRetrieverServer(TextRetrieverServicer):
         assert self.begin_id >= 0
         assert self.count_list >= 1
         ret_list = self.dual_candidate_info[self.begin_id:self.begin_id + self.count_list]
-        return ListingResponse(status=SUCCESS, candidates=ret_list)
+        return ListingResponse(status=5, candidates=ret_list)
 
     def AddOrUpdateCandidates(self, request, context):
         self.to_be_added = self.candidates
@@ -153,7 +162,7 @@ class TextRetrieverServer(TextRetrieverServicer):
             except Exception as e:
                 print(e)
                 continue
-        return OperationResponse(status = SUCCESS, success_count = cnt)
+        return OperationResponse(status = 5, success_count = cnt)
 
     def DeleteCandidates(self, request, context):
         self.to_be_deleted = self.ids
@@ -171,9 +180,22 @@ class TextRetrieverServer(TextRetrieverServicer):
             except Exception as e:
                 print(e)
                 continue
-        return OperationResponse(status = SUCCESS, success_count = cnt)
+        return OperationResponse(status = 5, success_count = cnt)
 
     def CheckStatus(self, request, context):
         num_total_candidates = len(self.dual_candidate_info)
         appendix_keys = list(self.dual_candidate_info[0].appendix.keys())
         return RetrieverStatus(num_total_candidates = num_total_candidates, appendix_keys = appendix_keys)
+
+
+if __name__ == "__main__": 
+    server = grpc.server(futures.ThreadPoolExecutor(max_workers=1), )
+    textretriever_server = TextRetrieverServer() 
+    textretriever_servicer = add_TextRetrieverServicer_to_server(textretriever_server, server) 
+    server.add_insecure_port("[::]:{}".format(35015)) 
+    server.start() 
+    try:
+        while True:
+            time.sleep(60 * 60 * 24) 
+    except KeyboardInterrupt: 
+        server.stop(0) 
