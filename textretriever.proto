@@ -1,0 +1,71 @@
+syntax = "proto3";
+
+import "google/protobuf/empty.proto";
+
+service TextRetriever {
+  rpc CheckStatus(google.protobuf.Empty) returns (RetrieverStatus) {}
+  rpc RetrieveTexts(TextRetrievalRequests) return (TextRetrievalResponse) {}
+  rpc ListCandidates(ListingRequest) returns (ListingResponse) {}
+  rpc AddOrUpdateCandidates(AddOrUpdateRequest) returns (OperationResponse) {}
+  rpc DeleteCandidates(DeletionRequest) returns (OperationResponse) {}
+}
+
+message Candidate {
+  string text = 1 ;
+  optional string id = 2; // if registered
+  optional float score = 3; // if calculated through retrieval
+  map<string, string> appendix = 4; // if exists `optional` is not allowed for map
+}
+
+enum OperationStatus {
+  STATUS_UNSPECIFIED = 0;
+  PENDING = 1;
+  RUNNING = 2;
+  ABORTING = 3;
+  FAILURE = 4;
+  SUCCESS = 5;
+}
+
+message OperationResponse {
+  OperationStatus status = 1;
+  int32 success_count = 2;
+  optional string msg = 3;
+}
+
+message RetrieverStatus {
+  int32 num_total_candidates = 1;
+  repeated string appendix_keys = 2;
+}
+
+message TextRetrievalRequest {
+  repeated string query_texts = 1;
+  int32 num_candidates = 2;
+}
+
+message TextRetrievalResponse {
+  OperationStatus status = 1;
+  repeated RetrievalResult results = 2;
+}
+
+message RetrievalResult {
+  string query_text = 1;
+  repeated Candidate candidates = 1;
+}
+
+message AddOrUpdateRequest {
+  repeated Candidate candidates = 1;
+}
+
+message DeletionRequest {
+  repeated string ids = 1;
+}
+
+message ListingRequest {
+  string begin_id = 1;
+  int32 count = 2;
+}
+
+message ListingResponse {
+  OperationStatus status = 1;
+  repeated Candidate candidates = 2;
+}
