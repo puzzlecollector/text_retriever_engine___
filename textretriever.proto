@@ -49,7 +49,7 @@ message TextRetrievalResponse {
 
 message RetrievalResult {
   string query_text = 1;
-  repeated Candidate candidates = 1;
+  repeated Candidate candidates = 2;
 }
 
 message AddOrUpdateRequest {
