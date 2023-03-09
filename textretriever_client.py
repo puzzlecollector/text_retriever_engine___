@@ -15,10 +15,19 @@ class TextRetrieverClient:
         myinput.query_texts[:] = ["한 남자가 파스타를 먹는다."]
         myinput.num_candidates = 3
         out = self.stub.RetrieveTexts(myinput)
-        return out.results
+        return out.results 
+    def test_other_utils(self, input=None): 
+        ### list ###  
+        myinput = ListingRequest()  
+        myinput.begin_id = "0" 
+        myinput.count = 2 
+        out = self.stub.ListCandidates(myinput) 
+        print(out.candidates) 
 
 if __name__ == "__main__":
     service_client = TextRetrieverClient()
     print("Output")
     print("*" * 100)
-    print(service_client.processor()) ## simple test
+    print(service_client.processor()) ## simple test 
+    print("Testing other utilities") 
+    service_client.test_other_utils()
